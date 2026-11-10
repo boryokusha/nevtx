@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from rich.console import RenderableType
+from rich.console import Group, RenderableType
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
@@ -14,13 +14,46 @@ from textual.widgets import (
     Footer,
     Header,
     Input,
-    Label,
     Static,
 )
 
 from nevtx.core.mock import generate_mock_events
 from nevtx.core.models import EventRecord
 from nevtx.parsers.rust_engine import FastEvtxParser
+
+
+class ThreatStatusBar(Static):
+    """Compact visual progress bar showing Threat vs Normal event distribution."""
+
+    def update_stats(self, records: List[EventRecord]) -> None:
+        total = len(records)
+        if total == 0:
+            self.update("[dim]No events loaded[/dim]")
+            return
+
+        threat_count = sum(1 for r in records if r.mitre_matches)
+        normal_count = total - threat_count
+        threat_pct = (threat_count / total) * 100
+        normal_pct = 100 - threat_pct
+
+        # Construct a 15-block visual ratio bar
+        bar_length = 15
+        threat_blocks = int(round((threat_count / total) * bar_length))
+        normal_blocks = bar_length - threat_blocks
+
+        # Build Rich formatted text
+        text = Text()
+        text.append(" 🛡️ Threat Ratio: ", style="bold white")
+        text.append("▕", style="dim")
+        text.append("█" * threat_blocks, style="bold red" if threat_pct > 30 else "bold yellow")
+        text.append("█" * normal_blocks, style="bold green")
+        text.append("▏ ", style="dim")
+        text.append(f"{threat_pct:.0f}% Threats ", style="bold red" if threat_count > 0 else "green")
+        text.append(f"({threat_count}/{total}) ", style="bold yellow")
+        text.append("• ", style="dim")
+        text.append(f"{normal_count} Clean", style="green")
+
+        self.update(text)
 
 
 class Inspector(Static):
@@ -87,15 +120,6 @@ class Inspector(Static):
             )
         )
 
-        # Combine all renderables into one view
-        combined = Text()
-        for r in renderables:
-            if isinstance(r, Panel):
-                # Using rich console rendering
-                pass
-
-        # Textual Static can render multiple panels bundled inside a Group
-        from rich.console import Group
         self.update(Group(*renderables))
 
 
@@ -135,7 +159,7 @@ class NevtxApp(App):
     .filter-btn {
         margin-right: 1;
         height: 1;
-        min-width: 12;
+        min-width: 10;
         border: none;
         background: #27272a;
         color: #a1a1aa;
@@ -150,6 +174,13 @@ class NevtxApp(App):
         background: #2563eb;
         color: #ffffff;
         text-style: bold;
+    }
+
+    #threat-bar-container {
+        width: auto;
+        dock: right;
+        padding: 0 1;
+        align-vertical: middle;
     }
 
     #main-split {
@@ -208,10 +239,12 @@ class NevtxApp(App):
         with Container(id="quick-filters"):
             yield Button("[1] All", id="btn-all", classes="filter-btn -active")
             yield Button("[2] 🚨 Threats", id="btn-threats", classes="filter-btn")
-            yield Button("[3] 🔑 Failed Logon", id="btn-failed", classes="filter-btn")
+            yield Button("[3] 🔑 Failed", id="btn-failed", classes="filter-btn")
             yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
-            yield Button("[5] ⚡ PowerShell", id="btn-ps", classes="filter-btn")
+            yield Button("[5] ⚡ PS", id="btn-ps", classes="filter-btn")
             yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
+            with Container(id="threat-bar-container"):
+                yield ThreatStatusBar(id="threat-status-bar")
         with Horizontal(id="main-split"):
             with Vertical(id="table-container"):
                 yield DataTable(id="events-table", cursor_type="row")
@@ -250,6 +283,10 @@ class NevtxApp(App):
         for record in raw_records:
             self.records.append(record)
             self.record_map[record.record_id] = record
+
+        # Update threat ratio bar
+        threat_bar = self.query_one(ThreatStatusBar)
+        threat_bar.update_stats(self.records)
 
         self.apply_filter()
 
