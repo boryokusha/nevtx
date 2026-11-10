@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 import xml.etree.ElementTree as ET
 
+from nevtx.analysis.mitre import MitreEngine
 from nevtx.core.models import EventRecord
 from nevtx.parsers.base import BaseEventParser
 
@@ -64,7 +65,13 @@ class FastEvtxParser(BaseEventParser):
 
                 # EventData extraction
                 event_data = event_meta.get("EventData", {})
-                summary = self._generate_summary(event_id, event_data)
+                data_map = event_data if isinstance(event_data, dict) else {}
+                summary = self._generate_summary(event_id, data_map)
+
+                # MITRE ATT&CK & Payload Analysis
+                mitre_matches = MitreEngine.analyze(event_id, data_map)
+                combined_text = " ".join(str(v) for v in data_map.values())
+                decoded_payloads = MitreEngine.extract_base64_payloads(combined_text)
 
                 yield EventRecord(
                     record_id=record_id,
@@ -75,9 +82,11 @@ class FastEvtxParser(BaseEventParser):
                     level=level,
                     computer=computer,
                     raw_xml=raw_json_str,
-                    data=event_data if isinstance(event_data, dict) else {},
-                    tags=[],
+                    data=data_map,
+                    tags=[m.technique_id for m in mitre_matches],
                     summary=summary,
+                    mitre_matches=mitre_matches,
+                    decoded_payloads=decoded_payloads,
                 )
             except Exception:
                 # Skip or yield partially populated record on corrupt individual entry

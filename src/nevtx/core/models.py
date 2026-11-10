@@ -18,6 +18,8 @@ class EventRecord:
     data: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
     summary: str = ""
+    mitre_matches: List[Any] = field(default_factory=list)
+    decoded_payloads: List[str] = field(default_factory=list)
 
     @property
     def timestamp_str(self) -> str:
@@ -37,3 +39,15 @@ class EventRecord:
         if "warn" in lvl:
             return "WARNING"
         return "INFO"
+
+    @property
+    def highest_severity(self) -> str:
+        """Determines highest severity between log level and MITRE matches."""
+        severities = [m.severity for m in self.mitre_matches]
+        if "CRITICAL" in severities:
+            return "CRITICAL"
+        if "HIGH" in severities:
+            return "HIGH"
+        if "MEDIUM" in severities:
+            return "MEDIUM"
+        return self.level_display

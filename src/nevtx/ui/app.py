@@ -2,10 +2,14 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from rich.console import RenderableType
+from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (
+    Button,
     DataTable,
     Footer,
     Header,
@@ -14,19 +18,53 @@ from textual.widgets import (
     Static,
 )
 
-from nevtx.core.models import EventRecord
 from nevtx.core.mock import generate_mock_events
+from nevtx.core.models import EventRecord
 from nevtx.parsers.rust_engine import FastEvtxParser
 
 
 class Inspector(Static):
-    """Detail pane for inspecting the selected event record."""
+    """Detail pane for inspecting the selected event record with MITRE & Decoded Payload triage."""
 
     def display_record(self, record: Optional[EventRecord]) -> None:
         if not record:
             self.update("[dim]No record selected.[/dim]")
             return
 
+        renderables: List[RenderableType] = []
+
+        # 1. MITRE ATT&CK Alert Box
+        if record.mitre_matches:
+            mitre_text = Text()
+            for m in record.mitre_matches:
+                sev_color = "bold red" if m.severity == "CRITICAL" else "bold yellow"
+                mitre_text.append(f"• [{m.technique_id}] {m.technique_name} ", style=sev_color)
+                mitre_text.append(f"({m.tactic} - {m.severity})\n", style="bold white")
+                mitre_text.append(f"  {m.description}\n", style="dim")
+
+            renderables.append(
+                Panel(
+                    mitre_text,
+                    title="🎯 [bold red]MITRE ATT&CK Triage[/bold red]",
+                    border_style="red" if any(m.severity == "CRITICAL" for m in record.mitre_matches) else "yellow",
+                )
+            )
+
+        # 2. Decoded Base64 Payload Box
+        if record.decoded_payloads:
+            payload_text = Text()
+            for payload in record.decoded_payloads:
+                payload_text.append(f"{payload}\n", style="bold green")
+
+            renderables.append(
+                Panel(
+                    payload_text,
+                    title="🔓 [bold green]Decoded Base64 / Obfuscated Payload[/bold green]",
+                    border_style="green",
+                )
+            )
+
+        # 3. Clean Key-Value & Raw Event Details
         details = {
             "RecordID": record.record_id,
             "EventID": record.event_id,
@@ -36,15 +74,33 @@ class Inspector(Static):
             "Level": record.level_display,
             "Computer": record.computer,
             "Summary": record.summary,
+            "Tags": record.tags,
             "EventData": record.data,
         }
 
         json_str = json.dumps(details, indent=2, ensure_ascii=False)
-        self.update(Syntax(json_str, "json", theme="monokai", word_wrap=True))
+        renderables.append(
+            Panel(
+                Syntax(json_str, "json", theme="monokai", word_wrap=True),
+                title="📄 [bold cyan]Event Data (JSON)[/bold cyan]",
+                border_style="blue",
+            )
+        )
+
+        # Combine all renderables into one view
+        combined = Text()
+        for r in renderables:
+            if isinstance(r, Panel):
+                # Using rich console rendering
+                pass
+
+        # Textual Static can render multiple panels bundled inside a Group
+        from rich.console import Group
+        self.update(Group(*renderables))
 
 
 class NevtxApp(App):
-    """Main Textual Application for nevtx."""
+    """Main Textual Application for nevtx with DFIR triage."""
 
     CSS = """
     Screen {
@@ -52,18 +108,48 @@ class NevtxApp(App):
         color: #e1e1e6;
     }
 
-    #filter-container {
+    #filter-bar {
         height: 3;
         dock: top;
         background: #1a1a1e;
-        padding: 0 1;
         layout: horizontal;
+        padding: 0 1;
+        align-vertical: middle;
     }
 
     #search-input {
-        width: 100%;
+        width: 1fr;
         border: none;
         background: #202024;
+    }
+
+    #quick-filters {
+        height: 3;
+        dock: top;
+        background: #16161a;
+        layout: horizontal;
+        padding: 0 1;
+        align-vertical: middle;
+    }
+
+    .filter-btn {
+        margin-right: 1;
+        height: 1;
+        min-width: 12;
+        border: none;
+        background: #27272a;
+        color: #a1a1aa;
+    }
+
+    .filter-btn:hover {
+        background: #3b82f6;
+        color: #ffffff;
+    }
+
+    .filter-btn.-active {
+        background: #2563eb;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #main-split {
@@ -72,13 +158,13 @@ class NevtxApp(App):
     }
 
     #table-container {
-        width: 60%;
+        width: 62%;
         height: 100%;
         border-right: solid #2a2a30;
     }
 
     #inspector-container {
-        width: 40%;
+        width: 38%;
         height: 100%;
         background: #18181b;
         padding: 1;
@@ -90,7 +176,7 @@ class NevtxApp(App):
     }
 
     DataTable > .datatable--cursor {
-        background: #3b82f6;
+        background: #2563eb;
         color: #ffffff;
     }
     """
@@ -99,6 +185,11 @@ class NevtxApp(App):
         ("q", "quit", "Quit"),
         ("/", "focus_search", "Search"),
         ("escape", "unfocus_search", "Clear Focus"),
+        ("1", "filter_all", "All"),
+        ("2", "filter_threats", "Threats"),
+        ("3", "filter_logons", "Failed (4625)"),
+        ("4", "filter_process", "Process (4688)"),
+        ("5", "filter_ps", "PowerShell"),
     ]
 
     def __init__(self, file_path: Optional[Path] = None, is_demo: bool = False):
@@ -107,16 +198,24 @@ class NevtxApp(App):
         self.is_demo = is_demo
         self.records: List[EventRecord] = []
         self.record_map: Dict[int, EventRecord] = {}
+        self.active_filter: str = "all"
+        self.search_query: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Container(id="filter-container"):
-            yield Input(placeholder="🔍 Search (Event ID, username, process, keyword)... [/]", id="search-input")
+        with Container(id="filter-bar"):
+            yield Input(placeholder="🔍 Search across events (regex, username, command)... [/]", id="search-input")
+        with Container(id="quick-filters"):
+            yield Button("[1] All", id="btn-all", classes="filter-btn -active")
+            yield Button("[2] 🚨 Threats", id="btn-threats", classes="filter-btn")
+            yield Button("[3] 🔑 Failed Logon", id="btn-failed", classes="filter-btn")
+            yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
+            yield Button("[5] ⚡ PowerShell", id="btn-ps", classes="filter-btn")
+            yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
         with Horizontal(id="main-split"):
             with Vertical(id="table-container"):
                 yield DataTable(id="events-table", cursor_type="row")
             with Vertical(id="inspector-container"):
-                yield Label("📄 [bold cyan]Event Details[/bold cyan]")
                 yield Inspector(id="inspector")
         yield Footer()
 
@@ -129,12 +228,10 @@ class NevtxApp(App):
             self.title = "nevtx"
 
         table = self.query_one(DataTable)
-        table.add_columns("Time", "Event ID", "Level", "Provider", "Summary")
+        table.add_columns("Time", "ID", "Threat / Level", "MITRE", "Summary")
         self.load_events()
 
     def load_events(self) -> None:
-        table = self.query_one(DataTable)
-        table.clear()
         self.records.clear()
         self.record_map.clear()
 
@@ -154,20 +251,60 @@ class NevtxApp(App):
             self.records.append(record)
             self.record_map[record.record_id] = record
 
-            # Styling level
-            level_str = record.level_display
-            if level_str in ("CRITICAL", "ERROR"):
-                level_styled = f"[bold red]{level_str}[/bold red]"
-            elif level_str == "WARNING":
-                level_styled = f"[bold yellow]{level_str}[/bold yellow]"
+        self.apply_filter()
+
+    def apply_filter(self) -> None:
+        table = self.query_one(DataTable)
+        table.clear()
+
+        query = self.search_query.lower()
+
+        for record in self.records:
+            # Check Quick Filter
+            if self.active_filter == "threats" and not record.mitre_matches:
+                continue
+            if self.active_filter == "failed" and record.event_id != 4625:
+                continue
+            if self.active_filter == "process" and record.event_id not in (4688, 1):
+                continue
+            if self.active_filter == "ps" and record.event_id != 4104:
+                continue
+            if self.active_filter == "cleared" and record.event_id not in (1102, 104):
+                continue
+
+            # Check Search Query
+            if query:
+                combined_match = (
+                    query in str(record.event_id)
+                    or query in record.provider.lower()
+                    or query in record.summary.lower()
+                    or query in record.computer.lower()
+                    or any(query in m.technique_id.lower() or query in m.technique_name.lower() for m in record.mitre_matches)
+                )
+                if not combined_match:
+                    continue
+
+            # Threat / Level Badge
+            if record.mitre_matches:
+                highest = record.highest_severity
+                if highest == "CRITICAL":
+                    threat_badge = "[bold red]🚨 CRITICAL[/bold red]"
+                elif highest == "HIGH":
+                    threat_badge = "[bold orange3]⚠️ HIGH[/bold orange3]"
+                else:
+                    threat_badge = "[bold yellow]⚡ MEDIUM[/bold yellow]"
+                mitre_tag = ", ".join(m.technique_id for m in record.mitre_matches)
+                mitre_cell = f"[bold red]{mitre_tag}[/bold red]"
             else:
-                level_styled = f"[green]{level_str}[/green]"
+                level_str = record.level_display
+                threat_badge = f"[green]{level_str}[/green]"
+                mitre_cell = "[dim]-[/dim]"
 
             table.add_row(
                 record.timestamp_str,
                 str(record.event_id),
-                level_styled,
-                record.provider[:24],
+                threat_badge,
+                mitre_cell,
                 record.summary,
                 key=str(record.record_id),
             )
@@ -183,40 +320,46 @@ class NevtxApp(App):
             pass
 
     def action_focus_search(self) -> None:
-        search_input = self.query_one("#search-input", Input)
-        search_input.focus()
+        self.query_one("#search-input", Input).focus()
 
     def action_unfocus_search(self) -> None:
-        table = self.query_one(DataTable)
-        table.focus()
+        self.query_one(DataTable).focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        query = event.value.strip().lower()
-        table = self.query_one(DataTable)
-        table.clear()
+        self.search_query = event.value.strip()
+        self.apply_filter()
 
-        for record in self.records:
-            match = (
-                not query
-                or query in str(record.event_id)
-                or query in record.provider.lower()
-                or query in record.summary.lower()
-                or query in record.computer.lower()
-            )
-            if match:
-                level_str = record.level_display
-                if level_str in ("CRITICAL", "ERROR"):
-                    level_styled = f"[bold red]{level_str}[/bold red]"
-                elif level_str == "WARNING":
-                    level_styled = f"[bold yellow]{level_str}[/bold yellow]"
-                else:
-                    level_styled = f"[green]{level_str}[/green]"
+    # Quick filter actions
+    def set_active_filter(self, filter_name: str) -> None:
+        self.active_filter = filter_name
+        self.apply_filter()
 
-                table.add_row(
-                    record.timestamp_str,
-                    str(record.event_id),
-                    level_styled,
-                    record.provider[:24],
-                    record.summary,
-                    key=str(record.record_id),
-                )
+    def action_filter_all(self) -> None:
+        self.set_active_filter("all")
+
+    def action_filter_threats(self) -> None:
+        self.set_active_filter("threats")
+
+    def action_filter_logons(self) -> None:
+        self.set_active_filter("failed")
+
+    def action_filter_process(self) -> None:
+        self.set_active_filter("process")
+
+    def action_filter_ps(self) -> None:
+        self.set_active_filter("ps")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+        if btn_id == "btn-all":
+            self.set_active_filter("all")
+        elif btn_id == "btn-threats":
+            self.set_active_filter("threats")
+        elif btn_id == "btn-failed":
+            self.set_active_filter("failed")
+        elif btn_id == "btn-process":
+            self.set_active_filter("process")
+        elif btn_id == "btn-ps":
+            self.set_active_filter("ps")
+        elif btn_id == "btn-cleared":
+            self.set_active_filter("cleared")
