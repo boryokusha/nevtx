@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d0e12" />
+      <stop offset="50%" stop-color="#14151d" />
+      <stop offset="100%" stop-color="#1b1c28" />
+    </linearGradient>
+
+    <!-- Glowing Accent Gradients -->
+    <linearGradient id="cyan-glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f2fe" />
+      <stop offset="100%" stop-color="#4facfe" />
+    </linearGradient>
+
+    <linearGradient id="red-glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff0844" />
+      <stop offset="100%" stop-color="#ff4e50" />
+    </linearGradient>
+
+    <!-- Lens Shield Glow Filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <filter id="soft-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <style>
+    .title { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 900; font-size: 64px; fill: #ffffff; letter-spacing: -1.5px; }
+    .subtitle { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 16px; fill: #94a3b8; font-weight: 500; letter-spacing: 0.5px; }
+    .tag { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; fill: #38bdf8; }
+    .binary { font-family: 'JetBrains Mono', monospace; font-size: 11px; fill: #222634; user-select: none; }
+  </style>
+
+  <!-- Card Background -->
+  <rect width="900" height="320" rx="16" fill="url(#bg-grad)" stroke="#232736" stroke-width="2" />
+
+  <!-- Background Data Streams -->
+  <g class="binary" opacity="0.65">
+    <text x="40" y="45">01000101 01010110 01010100 01011000 [EVENT_RECORD_HEADER] 4624 4625 4688 7045</text>
+    <text x="40" y="70">SYSTEM_TIME: 2026-11-10T21:15:00Z | PROVIDER: Microsoft-Windows-Security-Auditing</text>
+    <text x="40" y="270">MITRE: [T1490: Inhibit Recovery] [T1003: Credential Dumping] [T1059.001: PowerShell]</text>
+    <text x="40" y="295">ANALYSIS_MODE: DFIR_STREAMING_TRIAGE | KERNEL: ARCH_LINUX_x86_64 | STATUS: ACTIVE</text>
+  </g>
+
+  <!-- Decorative Grid Lines -->
+  <line x1="0" y1="100" x2="900" y2="100" stroke="#1e2230" stroke-width="1" stroke-dasharray="6,6" />
+  <line x1="0" y1="230" x2="900" y2="230" stroke="#1e2230" stroke-width="1" stroke-dasharray="6,6" />
+
+  <!-- Cyber Lens / Shield Emblem -->
+  <g transform="translate(90, 95)">
+    <!-- Outer Ring with Glow -->
+    <circle cx="65" cy="65" r="54" fill="none" stroke="url(#cyan-glow)" stroke-width="3" filter="url(#glow)" opacity="0.7" />
+    <circle cx="65" cy="65" r="54" fill="#11131c" stroke="url(#cyan-glow)" stroke-width="2.5" />
+
+    <!-- Scanner Crosshairs -->
+    <line x1="65" y1="20" x2="65" y2="35" stroke="#38bdf8" stroke-width="2" />
+    <line x1="65" y1="95" x2="65" y2="110" stroke="#38bdf8" stroke-width="2" />
+    <line x1="20" y1="65" x2="35" y2="65" stroke="#38bdf8" stroke-width="2" />
+    <line x1="95" y1="65" x2="110" y2="65" stroke="#38bdf8" stroke-width="2" />
+
+    <!-- Center Threat Warning Diamond -->
+    <polygon points="65,42 85,65 65,88 45,65" fill="#1e182a" stroke="url(#red-glow)" stroke-width="2.5" filter="url(#soft-glow)" />
+    
+    <!-- Magnifying Glass / Target Pivot -->
+    <circle cx="65" cy="65" r="6" fill="#f43f5e" />
+    <path d="M78 78 L98 98" stroke="url(#cyan-glow)" stroke-width="4" stroke-linecap="round" />
+  </g>
+
+  <!-- Typography & Details -->
+  <g transform="translate(260, 115)">
+    <!-- Category Pill -->
+    <rect x="0" y="-32" width="135" height="24" rx="12" fill="#0c4a6e" opacity="0.6" stroke="#0284c7" stroke-width="1" />
+    <text x="14" y="-16" class="tag">⚡ DFIR TRIAGE TUI</text>
+
+    <!-- Main Title -->
+    <text x="0" y="32" class="title">nevtx</text>
+    <text x="185" y="32" class="title" fill="url(#cyan-glow)">.</text>
+
+    <!-- Subtitle / Tagline -->
+    <text x="0" y="65" class="subtitle">Windows Event Log TUI Viewer &amp; Analysis Engine for Linux</text>
+  </g>
+
+  <!-- Right Decorative Status Pill -->
+  <g transform="translate(670, 40)">
+    <rect width="180" height="30" rx="15" fill="#171923" stroke="#2d3348" stroke-width="1" />
+    <circle cx="20" cy="15" r="4" fill="#10b981" />
+    <text x="34" y="19" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="600" fill="#cbd5e1">RUST ENGINE ACTIVE</text>
+  </g>
+</svg>
