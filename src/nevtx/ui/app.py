@@ -37,7 +37,6 @@ class ThreatStatusBar(Static):
         normal_count = total - threat_count
         threat_pct = (threat_count / total) * 100
 
-        # Construct a 16-block visual ratio bar
         bar_length = 16
         threat_blocks = int(round((threat_count / total) * bar_length))
         normal_blocks = bar_length - threat_blocks
@@ -141,34 +140,38 @@ class NevtxApp(App):
         color: #e1e1e6;
     }
 
-    #top-bar {
-        height: 3;
+    /* Single unified top container docked cleanly */
+    #top-panel {
         dock: top;
-        background: #1a1a1e;
+        height: auto;
+        background: #16161a;
+    }
+
+    #nav-row {
+        height: 3;
         layout: horizontal;
         padding: 0 1;
         align-vertical: middle;
+        background: #1a1a1f;
     }
 
     #file-select {
-        width: 36;
+        width: 40;
         margin-right: 1;
-        background: #27272a;
     }
 
     #search-input {
         width: 1fr;
         border: none;
-        background: #202024;
+        background: #222228;
     }
 
-    #quick-filters {
+    #filter-row {
         height: 3;
-        dock: top;
-        background: #16161a;
         layout: horizontal;
         padding: 0 1;
         align-vertical: middle;
+        background: #151518;
     }
 
     .filter-btn {
@@ -193,8 +196,7 @@ class NevtxApp(App):
 
     #threat-status-bar {
         height: 1;
-        dock: top;
-        background: #1a1a24;
+        background: #1c1c24;
         color: #ffffff;
         padding: 0 1;
     }
@@ -250,7 +252,6 @@ class NevtxApp(App):
         self.folder_path = folder_path
         self.is_demo = is_demo
 
-        # Multi-file storage: key = display name / path, value = list of records
         self.files_cache: Dict[str, List[EventRecord]] = {}
         self.active_file_key: str = ""
         self.current_records: List[EventRecord] = []
@@ -261,18 +262,20 @@ class NevtxApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Container(id="top-bar"):
-            # Top-left file dropdown selector
-            yield Select[str]([("Loading...", "loading")], id="file-select", allow_blank=False)
-            yield Input(placeholder="🔍 Search across events (regex, username, command)... [/]", id="search-input")
-        with Container(id="quick-filters"):
-            yield Button("[1] All", id="btn-all", classes="filter-btn -active")
-            yield Button("[2] 🚨 Threats", id="btn-threats", classes="filter-btn")
-            yield Button("[3] 🔑 Failed", id="btn-failed", classes="filter-btn")
-            yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
-            yield Button("[5] ⚡ PS", id="btn-ps", classes="filter-btn")
-            yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
-        yield ThreatStatusBar(id="threat-status-bar")
+        # Single top panel with clean vertical stacking
+        with Vertical(id="top-panel"):
+            with Horizontal(id="nav-row"):
+                yield Select[str]([("📁 [Loading Files...]", "init")], id="file-select", allow_blank=False)
+                yield Input(placeholder="🔍 Search (regex, event id, username, cmd)... [/]", id="search-input")
+            with Horizontal(id="filter-row"):
+                yield Button("[1] All", id="btn-all", classes="filter-btn -active")
+                yield Button("[2] 🚨 Threats", id="btn-threats", classes="filter-btn")
+                yield Button("[3] 🔑 Failed", id="btn-failed", classes="filter-btn")
+                yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
+                yield Button("[5] ⚡ PS", id="btn-ps", classes="filter-btn")
+                yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
+            yield ThreatStatusBar(id="threat-status-bar")
+
         with Horizontal(id="main-split"):
             with Vertical(id="table-container"):
                 yield DataTable(id="events-table", cursor_type="row")
@@ -315,7 +318,6 @@ class NevtxApp(App):
                 except Exception as e:
                     self.notify(f"Failed parsing {p.name}: {e}", severity="warning")
 
-            # Add Merged Timeline option if more than 1 file
             if len(evtx_files) > 1:
                 all_merged.sort(key=lambda r: r.timestamp or Path.stat)
                 merged_key = f"📁 [All Files - Merged Timeline ({len(all_merged)})]"
@@ -338,9 +340,9 @@ class NevtxApp(App):
         else:
             return
 
-        # Update select options
         select_widget = self.query_one("#file-select", Select)
         select_widget.set_options(select_options)
+        select_widget.value = default_key
         self.switch_to_file(default_key)
 
     def switch_to_file(self, file_key: str) -> None:
@@ -348,17 +350,14 @@ class NevtxApp(App):
         self.current_records = self.files_cache.get(file_key, [])
         self.record_map = {r.record_id: r for r in self.current_records}
 
-        # Analyze log gaps (anti-forensics)
         gaps = LogGapDetector.analyze(self.current_records, min_gap_minutes=25)
-
-        # Update Threat Bar with Gaps
         threat_bar = self.query_one(ThreatStatusBar)
         threat_bar.update_stats(self.current_records, gaps)
 
         self.apply_filter()
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if event.value and event.value != "loading":
+        if event.value and event.value != "init":
             self.switch_to_file(str(event.value))
 
     def apply_filter(self) -> None:
@@ -368,7 +367,6 @@ class NevtxApp(App):
         query = self.search_query.lower()
 
         for record in self.current_records:
-            # Check Quick Filter
             if self.active_filter == "threats" and not record.mitre_matches:
                 continue
             if self.active_filter == "failed" and record.event_id != 4625:
@@ -380,7 +378,6 @@ class NevtxApp(App):
             if self.active_filter == "cleared" and record.event_id not in (1102, 104):
                 continue
 
-            # Check Search Query
             if query:
                 combined_match = (
                     query in str(record.event_id)
@@ -392,7 +389,6 @@ class NevtxApp(App):
                 if not combined_match:
                     continue
 
-            # Threat / Level Badge
             if record.mitre_matches:
                 highest = record.highest_severity
                 if highest == "CRITICAL":
