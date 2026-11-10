@@ -23,7 +23,7 @@ from nevtx.parsers.rust_engine import FastEvtxParser
 
 
 class ThreatStatusBar(Static):
-    """Compact visual progress bar showing Threat vs Normal event distribution."""
+    """Prominent visual status bar showing Threat vs Normal event distribution."""
 
     def update_stats(self, records: List[EventRecord]) -> None:
         total = len(records)
@@ -34,24 +34,23 @@ class ThreatStatusBar(Static):
         threat_count = sum(1 for r in records if r.mitre_matches)
         normal_count = total - threat_count
         threat_pct = (threat_count / total) * 100
-        normal_pct = 100 - threat_pct
 
-        # Construct a 15-block visual ratio bar
-        bar_length = 15
+        # Construct a 20-block high-visibility ratio bar
+        bar_length = 20
         threat_blocks = int(round((threat_count / total) * bar_length))
         normal_blocks = bar_length - threat_blocks
 
         # Build Rich formatted text
         text = Text()
-        text.append(" 🛡️ Threat Ratio: ", style="bold white")
+        text.append(" 🛡️ MITRE THREAT RATIO: ", style="bold bright_white on #222228")
         text.append("▕", style="dim")
-        text.append("█" * threat_blocks, style="bold red" if threat_pct > 30 else "bold yellow")
+        text.append("█" * threat_blocks, style="bold red")
         text.append("█" * normal_blocks, style="bold green")
         text.append("▏ ", style="dim")
-        text.append(f"{threat_pct:.0f}% Threats ", style="bold red" if threat_count > 0 else "green")
-        text.append(f"({threat_count}/{total}) ", style="bold yellow")
-        text.append("• ", style="dim")
-        text.append(f"{normal_count} Clean", style="green")
+        text.append(f"{threat_pct:.1f}% THREATS ", style="bold red" if threat_count > 0 else "bold green")
+        text.append(f"({threat_count} Detected / {total} Total) ", style="bold yellow")
+        text.append("│ ", style="dim")
+        text.append(f"🟢 {normal_count} Clean Events", style="bold green")
 
         self.update(text)
 
@@ -176,11 +175,12 @@ class NevtxApp(App):
         text-style: bold;
     }
 
-    #threat-bar-container {
-        width: auto;
-        dock: right;
+    #threat-status-bar {
+        height: 1;
+        dock: top;
+        background: #1a1a24;
+        color: #ffffff;
         padding: 0 1;
-        align-vertical: middle;
     }
 
     #main-split {
@@ -243,8 +243,8 @@ class NevtxApp(App):
             yield Button("[4] 💻 Process", id="btn-process", classes="filter-btn")
             yield Button("[5] ⚡ PS", id="btn-ps", classes="filter-btn")
             yield Button("[6] 🧹 Cleared", id="btn-cleared", classes="filter-btn")
-            with Container(id="threat-bar-container"):
-                yield ThreatStatusBar(id="threat-status-bar")
+        # Distinct, full-width status row that cannot be hidden or clipped
+        yield ThreatStatusBar(id="threat-status-bar")
         with Horizontal(id="main-split"):
             with Vertical(id="table-container"):
                 yield DataTable(id="events-table", cursor_type="row")
