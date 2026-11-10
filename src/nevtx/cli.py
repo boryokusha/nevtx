@@ -18,6 +18,11 @@ def main() -> None:
         help="Path to the Windows Event Log (.evtx) file to inspect.",
     )
     parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Launch nevtx with simulated DFIR incident response event logs for demonstration.",
+    )
+    parser.add_argument(
         "-v", "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -25,9 +30,14 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.demo:
+        app = NevtxApp(is_demo=True)
+        app.run()
+        return
+
     if not args.file:
         parser.print_help()
-        print("\n[!] Please specify a path to an .evtx file.")
+        print("\n[!] Please specify a path to an .evtx file or use --demo to test.")
         sys.exit(1)
 
     evtx_path = args.file.expanduser().resolve()

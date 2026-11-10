@@ -15,6 +15,7 @@ from textual.widgets import (
 )
 
 from nevtx.core.models import EventRecord
+from nevtx.core.mock import generate_mock_events
 from nevtx.parsers.rust_engine import FastEvtxParser
 
 
@@ -100,9 +101,10 @@ class NevtxApp(App):
         ("escape", "unfocus_search", "Clear Focus"),
     ]
 
-    def __init__(self, file_path: Path):
+    def __init__(self, file_path: Optional[Path] = None, is_demo: bool = False):
         super().__init__()
         self.file_path = file_path
+        self.is_demo = is_demo
         self.records: List[EventRecord] = []
         self.record_map: Dict[int, EventRecord] = {}
 
@@ -119,7 +121,13 @@ class NevtxApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = f"nevtx - {self.file_path.name}"
+        if self.is_demo:
+            self.title = "nevtx [DEMO MODE - Simulated DFIR Triage]"
+        elif self.file_path:
+            self.title = f"nevtx - {self.file_path.name}"
+        else:
+            self.title = "nevtx"
+
         table = self.query_one(DataTable)
         table.add_columns("Time", "Event ID", "Level", "Provider", "Summary")
         self.load_events()
@@ -130,31 +138,39 @@ class NevtxApp(App):
         self.records.clear()
         self.record_map.clear()
 
-        parser = FastEvtxParser()
-        try:
-            for record in parser.parse(self.file_path):
-                self.records.append(record)
-                self.record_map[record.record_id] = record
+        if self.is_demo:
+            raw_records = generate_mock_events()
+        elif self.file_path:
+            parser = FastEvtxParser()
+            try:
+                raw_records = list(parser.parse(self.file_path))
+            except Exception as e:
+                self.notify(f"Error loading {self.file_path.name}: {e}", severity="error")
+                raw_records = []
+        else:
+            raw_records = []
 
-                # Styling level
-                level_str = record.level_display
-                if level_str in ("CRITICAL", "ERROR"):
-                    level_styled = f"[bold red]{level_str}[/bold red]"
-                elif level_str == "WARNING":
-                    level_styled = f"[bold yellow]{level_str}[/bold yellow]"
-                else:
-                    level_styled = f"[green]{level_str}[/green]"
+        for record in raw_records:
+            self.records.append(record)
+            self.record_map[record.record_id] = record
 
-                table.add_row(
-                    record.timestamp_str,
-                    str(record.event_id),
-                    level_styled,
-                    record.provider[:24],
-                    record.summary,
-                    key=str(record.record_id),
-                )
-        except Exception as e:
-            self.notify(f"Error loading {self.file_path.name}: {e}", severity="error")
+            # Styling level
+            level_str = record.level_display
+            if level_str in ("CRITICAL", "ERROR"):
+                level_styled = f"[bold red]{level_str}[/bold red]"
+            elif level_str == "WARNING":
+                level_styled = f"[bold yellow]{level_str}[/bold yellow]"
+            else:
+                level_styled = f"[green]{level_str}[/green]"
+
+            table.add_row(
+                record.timestamp_str,
+                str(record.event_id),
+                level_styled,
+                record.provider[:24],
+                record.summary,
+                key=str(record.record_id),
+            )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         row_key = event.row_key.value
